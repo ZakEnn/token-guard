@@ -7,6 +7,8 @@ a scripting mode that collapses many tool calls into one, and a **proxy mode**
 that multiplexes your *other* MCP servers through the same optimization
 layers (so TokenGuard can be the only server in your `mcp.json`).
 
+ <img width="886" height="264" alt="image" src="https://github.com/user-attachments/assets/4b0c9d0c-c8d1-4f4c-a17f-7c48a2d57d22" />
+
 Measured savings (medians with ranges, exact BPE counting, reproducible):
 see [`bench/RESULTS.md`](bench/RESULTS.md).
 
@@ -39,7 +41,7 @@ per-tier cache splits, per-client session detail, index freshness, license
 mode, and degradation state. Set `status.price_per_mtok` in config.toml to
 see an estimated `$` saved.
 
- <img width="886" height="264" alt="image" src="https://github.com/user-attachments/assets/4b0c9d0c-c8d1-4f4c-a17f-7c48a2d57d22" />
+
 
 ## Install
 
