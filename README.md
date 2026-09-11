@@ -1,5 +1,8 @@
 # TokenGuard
 
+<img width="816" height="254" alt="image" src="https://github.com/user-attachments/assets/4b0c9d0c-c8d1-4f4c-a17f-7c48a2d57d22" />
+
+
 A local MCP server that cuts LLM token consumption on agentic coding by
 returning **fewer, denser tokens per tool call** — structural code summaries
 instead of whole files, diffs instead of full re-reads, cached tool results,
