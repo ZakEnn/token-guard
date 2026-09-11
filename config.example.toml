@@ -1,0 +1,65 @@
+# TokenGuard configuration — copy to ~/.token-guard/config.toml
+# All keys are optional; defaults shown. (plan §5.1, §6)
+
+[cache]
+# Local cache size budget in MB. The licensed entitlement can raise this;
+# free/pass-through tiers are floored at 100 MB (§6.1.3 / §6.5.2).
+size_mb = 512
+# Tier-2 semantic-match cosine threshold. Higher = stricter (fewer false
+# positives). A false positive is a wrong answer, so this is conservative (§6.1.1).
+semantic_threshold = 0.94
+# Opt-in AES-256-GCM encryption of cached results at rest, for compliance
+# (§6.2.1). Off by default — the cache derives from code already on disk.
+encrypt = false
+
+[sandbox]
+# Code Mode limits (§6.4). timeout_ms is the ceiling; a per-call timeout_ms
+# may only lower it. statement_limit is the second tripwire.
+timeout_ms = 5000
+max_timeout_ms = 5000
+statement_limit = 5000000
+# Script heap cap — enforced natively on Oracle GraalVM (sandbox options);
+# on community stacks the wall-clock watchdog is the enforcement (P0.4).
+max_heap = "256MB"
+
+[telemetry]
+# Anonymous daily usage rollups (tokens saved, hit rate). No code, paths, or
+# prompts are ever sent (§6.6.4). Set false to disable entirely.
+enabled = true
+
+[status]
+# Optional (P2.2): when > 0, guard_status shows an estimated $ saved computed
+# as saved_tokens x this price per million input tokens. Off (0) by default —
+# TokenGuard never invents a price for your model.
+price_per_mtok = 0
+
+[backend]
+# SaaS backend base URL (licensing, team cache, analytics).
+url = "https://api.tokenguard.io"
+
+[proxy]
+# How downstream MCP servers (below) are exposed to your IDE (P1.2):
+#   "facade"     (default) — 3 fixed tools: search_tools / describe_tools /
+#                 execute_tool. Context cost stays constant no matter how many
+#                 downstream tools exist. Costs one extra discovery round-trip.
+#   "namespaced" — every downstream tool re-registered as ds__<server>__<tool>.
+#                 Compatible with hosts that dislike indirection; grows context
+#                 with each tool and can hit host tool-count caps (Windsurf: 100).
+expose = "facade"
+# Per-request timeout for downstream calls.
+request_timeout_ms = 30000
+
+# Downstream MCP servers TokenGuard spawns and proxies (P1.1). Move the entries
+# from your IDE's mcp.json here (or run `token-guard import-servers`), leave
+# token-guard as the ONLY server in the IDE config, and every downstream result
+# is cached, metered, and traced. NOTE: the minimal TOML parser has no arrays —
+# `args` is one whitespace-split string (quoted arguments unsupported).
+#
+# [servers.github]
+# command = "npx"
+# args = "-y @modelcontextprotocol/server-github"
+# env.GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_..."
+#
+# [servers.postgres]
+# command = "uvx"
+# args = "mcp-server-postgres --dsn postgres://localhost/db"
