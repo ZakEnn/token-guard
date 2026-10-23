@@ -41,17 +41,80 @@ per-tier cache splits, per-client session detail, index freshness, license
 mode, and degradation state. Set `status.price_per_mtok` in config.toml to
 see an estimated `$` saved.
 
+## Install from GitHub Releases
 
+Each release ships one self-contained jar, `token-guard-<version>.jar`, with
+its `token-guard-<version>.jar.sha256` checksum and a signed build-provenance
+attestation. The jar isn't code-signed and there are no native binaries yet.
 
-## Install
+**Requires JDK 21+.** `java -version` must report 21 or newer (any
+distribution: Temurin, Corretto, Oracle, GraalVM).
+
+**1. Download** both files from the
+[latest release](https://github.com/ZakEnn/token-guard/releases/latest)
+(pre-releases such as `-rc1` are on the
+[releases page](https://github.com/ZakEnn/token-guard/releases) and aren't
+"latest"):
+
+```bash
+VERSION=0.1.0   # the release you picked, without the leading "v"
+curl -fLO "https://github.com/ZakEnn/token-guard/releases/download/v${VERSION}/token-guard-${VERSION}.jar"
+curl -fLO "https://github.com/ZakEnn/token-guard/releases/download/v${VERSION}/token-guard-${VERSION}.jar.sha256"
+# or, with the GitHub CLI:  gh release download "v${VERSION}" --repo ZakEnn/token-guard
+```
+
+**2. Verify the checksum** before running it. If the output isn't `OK` (or
+the hashes differ), delete the file and don't run it.
+
+```bash
+sha256sum -c "token-guard-${VERSION}.jar.sha256"          # Linux
+shasum -a 256 -c "token-guard-${VERSION}.jar.sha256"      # macOS
+```
+```powershell
+# Windows PowerShell
+$Version  = "0.1.0"
+$expected = (Get-Content "token-guard-$Version.jar.sha256").Split(" ")[0]
+$actual   = (Get-FileHash "token-guard-$Version.jar" -Algorithm SHA256).Hash
+if ($actual -ieq $expected) { "OK" } else { "MISMATCH - do not use this file" }
+```
+
+**3. Optional: verify build provenance.** This proves the jar was built by
+this repo's `release.yml` workflow from the tagged commit:
+
+```bash
+gh attestation verify "token-guard-${VERSION}.jar" --repo ZakEnn/token-guard
+```
+
+**4. Put it in place and run the self-check:**
+
+```bash
+mkdir -p ~/.token-guard
+mv "token-guard-${VERSION}.jar" ~/.token-guard/token-guard.jar
+java -jar ~/.token-guard/token-guard.jar --doctor --workspace .
+# Expected: sqlite OK, js sandbox OK, "All checks passed."
+```
+(PowerShell: `New-Item -ItemType Directory -Force "$HOME\.token-guard"` then
+`Move-Item "token-guard-$Version.jar" "$HOME\.token-guard\token-guard.jar"`.)
+
+**5. Register it with your client.** Use `"command": "java"` and `"args":
+["-jar", "/ABSOLUTE/path/to/.token-guard/token-guard.jar", "--workspace",
+"/ABSOLUTE/path/to/project"]`. JSON configs don't expand `~`, so spell out
+your home directory. The config file and key for each client are listed in
+[Per-client configuration](#per-client-configuration) below. Add
+`--no-telemetry` to the args to opt out of anonymous usage rollups (see
+[Security posture](#security-posture)).
+
+## Install (hosted installer: planned, NOT live yet)
 
 > **Not yet live:** the hosted installers and license purchase flow below are
 > the planned distribution path (`enhancement_implementation_plan.md` P4.2/P4.3)
-> and are **not operational yet**. Until then, build from source (next section).
+> and **don't work yet**. The `tokenguard.io` URLs aren't served. Until
+> then, use [Install from GitHub Releases](#install-from-github-releases)
+> above or build from source (next section).
 
 ```
-curl -sSf https://tokenguard.io/install.sh | sh      # macOS / Linux  (planned)
-irm https://tokenguard.io/install.ps1 | iex          # Windows PowerShell  (planned)
+curl -sSf https://tokenguard.io/install.sh | sh      # macOS / Linux  (planned, not live)
+irm https://tokenguard.io/install.ps1 | iex          # Windows PowerShell  (planned, not live)
 ```
 
 Then add to your IDE's `mcp.json` (see the snippet the installer prints).
@@ -63,7 +126,8 @@ Without a license key it runs in **free-local mode** (local optimization,
 ```
 cd token-guard
 mvn test                       # 179 tests (JDK 21)
-mvn -q -DskipTests package     # runnable jar: core/target/token-guard.jar
+mvn -q -DskipTests package     # core/target/token-guard.jar (+ dependency/), and
+                               # core/target/token-guard-all.jar (self-contained)
 mvn -Pnative -DskipTests package   # native image (needs GraalVM)
 ```
 
