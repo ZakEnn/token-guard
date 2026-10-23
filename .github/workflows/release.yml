@@ -1,0 +1,169 @@
+name: release
+
+# Zero-cost release pipeline: self-contained JVM jar (JDK 21+), SHA-256
+# checksum, keyless SLSA build provenance, GitHub Release with generated notes.
+# No paid code signing, no native binaries (native-image.yml is separate).
+#
+# Tag push  v1.2.3 / v1.2.3-rc1 / v1.2.3-beta2  -> build, test, attest, release.
+# Manual run (workflow_dispatch) on an EXISTING tag; dry_run (default true)
+# builds and verifies only, publishing nothing.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (e.g. v0.1.0-rc1)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Build and verify only; do not attest or publish'
+        required: true
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Resolve tag and version
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          # Strict format check: the tag ends up in file names and shell args.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '$TAG' is not of the form vMAJOR.MINOR.PATCH[-suffix]"
+            exit 1
+          fi
+          version="${TAG#v}"
+          prerelease=false
+          if [[ "$TAG" == *-rc* || "$TAG" == *-beta* ]]; then prerelease=true; fi
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$version prerelease=$prerelease"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Check tag matches the version baked into the build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Main.VERSION is what --version / serverInfo report; the pom version
+          # must agree. Pre-release suffixes are ignored (v0.1.0-rc1 -> 0.1.0).
+          base="${VERSION%%-*}"
+          pom=$(mvn -B -q -N help:evaluate -Dexpression=project.version -DforceStdout)
+          main=$(sed -nE 's/.*String VERSION = "([^"]+)".*/\1/p' core/src/main/java/io/tokenguard/Main.java)
+          echo "tag base=$base pom=$pom Main.VERSION=$main"
+          if [ "$base" != "$pom" ] || [ "$base" != "$main" ]; then
+            echo "::error::tag version $base != pom $pom / Main.VERSION $main — bump them before tagging"
+            exit 1
+          fi
+
+      - name: Test and package
+        run: mvn -B verify
+
+      - name: Stage release jar and checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          cp core/target/token-guard-all.jar "dist/token-guard-${VERSION}.jar"
+          cd dist
+          sha256sum "token-guard-${VERSION}.jar" > "token-guard-${VERSION}.jar.sha256"
+          cat "token-guard-${VERSION}.jar.sha256"
+          sha256sum -c "token-guard-${VERSION}.jar.sha256"
+
+      - name: Smoke test (documented command)
+        run: java -jar core/target/token-guard.jar --doctor --workspace .
+
+      - name: Smoke test (release jar alone, no dependency/ dir beside it)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # The real test: the shipped file must run with nothing next to it.
+          iso="$RUNNER_TEMP/isolated"
+          mkdir -p "$iso/data"
+          cp "dist/token-guard-${VERSION}.jar" "$iso/"
+          jar="$iso/token-guard-${VERSION}.jar"
+          java -jar "$jar" --doctor --workspace "$GITHUB_WORKSPACE" --cache-dir "$iso/data"
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute_script","arguments":{"script":"6 * 7"}}}' \
+            | java -jar "$jar" --workspace "$GITHUB_WORKSPACE" --cache-dir "$iso/data" --no-telemetry \
+            > "$iso/out.jsonl"
+          cat "$iso/out.jsonl" | cut -c1-200
+          grep -q '"protocolVersion"' "$iso/out.jsonl"
+          grep -q '"name":"query_codebase_structure"' "$iso/out.jsonl"
+          grep -q '"text":"42"' "$iso/out.jsonl"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    if: github.event_name == 'push' || inputs.dry_run == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the release + upload assets
+      id-token: write       # keyless (Sigstore) signing for the attestation
+      attestations: write   # store the provenance attestation
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Re-verify checksum after artifact transfer
+        working-directory: dist
+        run: sha256sum -c ./*.sha256
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/token-guard-${{ needs.build.outputs.version }}.jar
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          flags=(--generate-notes --verify-tag --title "TokenGuard ${TAG}")
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" \
+            "dist/token-guard-${VERSION}.jar" \
+            "dist/token-guard-${VERSION}.jar.sha256" \
+            --repo "$GITHUB_REPOSITORY" "${flags[@]}"

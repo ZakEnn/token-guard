@@ -20,7 +20,6 @@ jobs:
           distribution: 'graalvm'   # Oracle GraalVM (GFTC) — sandbox limits per plan A4
           cache: maven
       - run: mvn -B test
-        working-directory: token-guard
 
   native:
     needs: test
@@ -30,7 +29,7 @@ jobs:
         include:
           - { os: ubuntu-latest,      target: linux-x64 }
           - { os: ubuntu-24.04-arm,   target: linux-arm64 }
-          - { os: macos-13,           target: macos-x64 }
+          - { os: macos-15-intel,     target: macos-x64 }
           - { os: macos-latest,       target: macos-arm64 }
           - { os: windows-latest,     target: windows-x64 }
     runs-on: ${{ matrix.os }}
@@ -43,10 +42,9 @@ jobs:
           cache: maven
       - name: Build native image
         run: mvn -B -DskipTests -Pnative package
-        working-directory: token-guard
       - name: Smoke test (doctor + MCP handshake)
         shell: bash
-        working-directory: token-guard/core/target
+        working-directory: core/target
         run: |
           ./token-guard --doctor
           printf '%s\n' \
@@ -58,14 +56,16 @@ jobs:
           grep -q '"tools"' out.jsonl
       - name: Enforce size gate (< 80 MB)
         shell: bash
-        working-directory: token-guard/core/target
+        working-directory: core/target
         run: |
-          size=$(wc -c < token-guard* | head -1)
+          # exact name: core/target also holds token-guard.jar / token-guard-all.jar
+          bin=token-guard; [ -f token-guard.exe ] && bin=token-guard.exe
+          size=$(wc -c < "$bin")
           echo "binary size: $size bytes"
           test "$size" -lt 83886080
       - name: Stage release artifact + checksum
         shell: bash
-        working-directory: token-guard/core/target
+        working-directory: core/target
         run: |
           ext=""; [ "${{ matrix.target }}" = "windows-x64" ] && ext=".exe"
           cp "token-guard$ext" "token-guard-${{ matrix.target }}$ext"
@@ -76,7 +76,7 @@ jobs:
         with:
           name: token-guard-${{ matrix.target }}
           path: |
-            token-guard/core/target/token-guard-${{ matrix.target }}*
+            core/target/token-guard-${{ matrix.target }}*
 
   release:
     # Publishes the per-platform binaries + checksums the installers download.
