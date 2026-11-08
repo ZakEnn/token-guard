@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -135,7 +135,7 @@ jobs:
   release:
     needs: build
     if: github.event_name == 'push' || inputs.dry_run == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write       # create the release + upload assets
       id-token: write       # keyless (Sigstore) signing for the attestation
@@ -161,9 +161,28 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
-          flags=(--generate-notes --verify-tag --title "TokenGuard ${TAG}")
-          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          gh release create "$TAG" \
-            "dist/token-guard-${VERSION}.jar" \
-            "dist/token-guard-${VERSION}.jar.sha256" \
-            --repo "$GITHUB_REPOSITORY" "${flags[@]}"
+          assets=("dist/token-guard-${VERSION}.jar" "dist/token-guard-${VERSION}.jar.sha256")
+          # Idempotent: a release may already exist for this tag (created from the
+          # GitHub UI, or by an earlier run). Attach/replace assets instead of failing.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG exists — uploading assets (replacing any with the same name)"
+            gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            flags=(--generate-notes --verify-tag --title "TokenGuard ${TAG}")
+            if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" "${flags[@]}"
+          fi
+
+      - name: Verify published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # Round-trip: download what users will download and check the checksum.
+          mkdir -p "$RUNNER_TEMP/published" && cd "$RUNNER_TEMP/published"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "token-guard-${VERSION}.jar" \
+            --pattern "token-guard-${VERSION}.jar.sha256"
+          sha256sum -c "token-guard-${VERSION}.jar.sha256"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url -q .url
